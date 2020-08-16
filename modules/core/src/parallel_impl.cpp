@@ -67,6 +67,7 @@ DECLARE_CV_PAUSE
 # endif
 #endif // CV_PAUSE
 
+#include "cpu_timer.hpp"
 
 namespace cv
 {
@@ -374,7 +375,6 @@ public:
     // TODO exception handling
 };
 
-
 void WorkerThread::thread_body()
 {
     (void)cv::utils::getThreadID(); // notify OpenCV about new thread
@@ -386,8 +386,12 @@ void WorkerThread::thread_body()
     ThreadPool::ThreadStatistics& stat = thread_pool.threads_stat[id + 1];
 #endif
 
+	std::size_t it = 0;
     while (!stop_thread)
     {
+		auto cpu_time_start = thread_cpu_time().count();
+		auto wall_time_start_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+
         CV_LOG_VERBOSE(NULL, 5, "Thread: ... loop iteration: allow_active_wait=" << allow_active_wait << "   has_wake_signal=" << has_wake_signal);
         if (allow_active_wait && CV_WORKER_ACTIVE_WAIT > 0)
         {
@@ -489,6 +493,10 @@ void WorkerThread::thread_body()
         stat.threadFree = getTickCount();
         stat.keepActive = allow_active_wait;
 #endif
+		auto cpu_time_stop = thread_cpu_time().count();
+		auto wall_time_stop_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+		std::cout << "cpu_timer2,opencv," << id << "," << it << "," << wall_time_start_ns << "," << wall_time_stop_ns << "," << cpu_time_start << "," << cpu_time_stop << "\n";
+		++it;
     }
 }
 

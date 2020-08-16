@@ -113,16 +113,22 @@
 
 #if defined HAVE_TBB
 #  define CV_PARALLEL_FRAMEWORK "tbb"
+#  error "Sam's profiling code only works with pthreads"
 #elif defined HAVE_CSTRIPES
 #  define CV_PARALLEL_FRAMEWORK "cstripes"
+#  error "Sam's profiling code only works with pthreads"
 #elif defined HAVE_OPENMP
 #  define CV_PARALLEL_FRAMEWORK "openmp"
+#  error "Sam's profiling code only works with pthreads"
 #elif defined HAVE_GCD
 #  define CV_PARALLEL_FRAMEWORK "gcd"
+#  error "Sam's profiling code only works with pthreads"
 #elif defined WINRT
 #  define CV_PARALLEL_FRAMEWORK "winrt-concurrency"
+#  error "Sam's profiling code only works with pthreads"
 #elif defined HAVE_CONCURRENCY
 #  define CV_PARALLEL_FRAMEWORK "ms-concurrency"
+#  error "Sam's profiling code only works with pthreads"
 #elif defined HAVE_PTHREADS_PF
 #  define CV_PARALLEL_FRAMEWORK "pthreads"
 #endif
