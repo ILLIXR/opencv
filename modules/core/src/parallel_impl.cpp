@@ -129,6 +129,8 @@ public:
 
     Ptr<ParallelJob> job;
 
+	void incCounter();
+
 #ifdef CV_PROFILE_THREADS
     double tickFreq;
     int64 jobSubmitTime;
@@ -191,6 +193,26 @@ public:
 
 };
 
+class profile_record {
+public:
+	std::chrono::system_clock::time_point time;
+	std::size_t id; std::size_t counter; std::size_t subcounter; std::size_t wall_time_start_ns; std::size_t wall_time_stop_ns; std::size_t cpu_time_start_ns; std::size_t cpu_time_stop_ns;
+	profile_record(std::size_t id_, std::size_t counter_, std::size_t subcounter_, std::size_t wall_time_start_ns_, std::size_t wall_time_stop_ns_, std::size_t cpu_time_start_ns_, std::size_t cpu_time_stop_ns_)
+		: time{std::chrono::system_clock::now()}
+		, id{id_}
+		, counter{counter_}
+		, subcounter{subcounter_}
+		, wall_time_start_ns{wall_time_start_ns_}
+		, wall_time_stop_ns {wall_time_stop_ns_ }
+		, cpu_time_start_ns {cpu_time_start_ns_ }
+		, cpu_time_stop_ns  {cpu_time_stop_ns_  }
+	{ }
+};
+std::ostream& operator<<(std::ostream& os, const profile_record& r) {
+	os << "cpu_timer2," << r.id << "," << r.counter << "," << r.subcounter << "," << r.wall_time_start_ns << "," << r.wall_time_stop_ns << "," << r.cpu_time_start_ns << "," << r.cpu_time_stop_ns;
+    return os;
+}
+
 class WorkerThread
 {
 public:
@@ -222,6 +244,8 @@ public:
         , isActive(true)
 #endif
     {
+		const char* ILLIXR_STDOUT_METRICS = getenv("ILLIXR_STDOUT_METRICS");
+		should_profile = ILLIXR_STDOUT_METRICS && (strcmp(ILLIXR_STDOUT_METRICS, "y") == 0);
         CV_LOG_VERBOSE(NULL, 1, "MainThread: initializing new worker: " << id);
         int res = pthread_mutex_init(&mutex, NULL);
         if (res != 0)
@@ -278,6 +302,27 @@ public:
         ((WorkerThread*)thread_object)->thread_body();
         return 0;
     }
+
+
+#ifdef CV_CXX11
+	std::atomic<std::size_t> counter{0};
+	int64 dummy3_[8];
+#else
+    /*CV_DECL_ALIGNED(64)*/ volatile int counter = 0;
+	int64 dummy3_[8];
+#endif
+	std::vector<profile_record> profile_records;
+	bool should_profile;
+
+	void incCounter() { ++counter; }
+	void maybeFlush() {
+		if (!profile_records.empty() && profile_records[0].time < std::chrono::system_clock::now() - std::chrono::seconds{1}) {
+			for (const profile_record& r : profile_records) {
+				std::cout << r << "\n";
+			}
+			profile_records.clear();
+		}
+	}
 };
 
 class ParallelJob
@@ -359,6 +404,7 @@ public:
 
     std::atomic<int> completed_thread_count;  // number of threads completed any activities on this job
     int64 dummy2_[8];  // avoid cache-line reusing for the same atomics
+
 #else
     /*CV_DECL_ALIGNED(64)*/ volatile int current_task;  // next free part of job
     int64 dummy0_[8];  // avoid cache-line reusing for the same atomics
@@ -368,6 +414,7 @@ public:
 
     /*CV_DECL_ALIGNED(64)*/ volatile int completed_thread_count;  // number of threads completed any activities on this job
     int64 dummy2_[8];  // avoid cache-line reusing for the same atomics
+
 #endif
 
     volatile bool is_completed;  // std::atomic_flag ?
@@ -379,6 +426,7 @@ void WorkerThread::thread_body()
 {
     (void)cv::utils::getThreadID(); // notify OpenCV about new thread
     CV_LOG_VERBOSE(NULL, 5, "Thread: new thread: " << id);
+	std::cout << "thread," << std::this_thread::get_id() << ",opencv threadpool worker," << id << std::endl;
 
     bool allow_active_wait = true;
 
@@ -386,11 +434,14 @@ void WorkerThread::thread_body()
     ThreadPool::ThreadStatistics& stat = thread_pool.threads_stat[id + 1];
 #endif
 
-	std::size_t it = 0;
+	std::size_t subcounter = 0;
     while (!stop_thread)
     {
-		auto cpu_time_start = thread_cpu_time().count();
-		auto wall_time_start_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+		size_t cpu_time_start_ns = should_profile ? thread_cpu_time().count() : 0;
+		size_t wall_time_start_ns  = should_profile
+			? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count()
+			: 0
+			;
 
         CV_LOG_VERBOSE(NULL, 5, "Thread: ... loop iteration: allow_active_wait=" << allow_active_wait << "   has_wake_signal=" << has_wake_signal);
         if (allow_active_wait && CV_WORKER_ACTIVE_WAIT > 0)
@@ -493,10 +544,13 @@ void WorkerThread::thread_body()
         stat.threadFree = getTickCount();
         stat.keepActive = allow_active_wait;
 #endif
-		auto cpu_time_stop = thread_cpu_time().count();
-		auto wall_time_stop_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-		std::cout << "cpu_timer2,opencv," << id << "," << it << "," << wall_time_start_ns << "," << wall_time_stop_ns << "," << cpu_time_start << "," << cpu_time_stop << "\n";
-		++it;
+		if (should_profile) {
+			size_t cpu_time_stop_ns = thread_cpu_time().count();
+			size_t wall_time_stop_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+			profile_records.push_back(profile_record{id, counter, subcounter, wall_time_start_ns, wall_time_stop_ns, cpu_time_start_ns, cpu_time_stop_ns});
+			maybeFlush();
+			++subcounter;
+		}
     }
 }
 
@@ -519,6 +573,12 @@ ThreadPool::ThreadPool()
         CV_LOG_FATAL(NULL, "Failed to initialize ThreadPool (pthreads)");
     }
     num_threads = defaultNumberOfThreads();
+}
+
+void ThreadPool::incCounter() {
+	for (const cv::Ptr<cv::WorkerThread>& wt : threads) {
+		wt->incCounter();
+	}
 }
 
 bool ThreadPool::reconfigure_(unsigned new_threads_count)
@@ -765,6 +825,10 @@ void parallel_pthreads_set_threads_num(int num)
 void parallel_for_pthreads(const Range& range, const ParallelLoopBody& body, double nstripes)
 {
     ThreadPool::instance().run(range, body, nstripes);
+}
+
+void incCounter() {
+	ThreadPool::instance().incCounter();
 }
 
 }
