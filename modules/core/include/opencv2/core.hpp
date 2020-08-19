@@ -3272,9 +3272,6 @@ template<> struct ParamType<Scalar>
     enum { type = Param::SCALAR };
 };
 
-#define CV_HAS_SAMS_COUNTER
-std::size_t incCounter(std::size_t amount = 1);
-
 //! @} core_basic
 
 } //namespace cv

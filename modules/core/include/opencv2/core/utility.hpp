@@ -1195,6 +1195,12 @@ public:
     std::vector<Node<OBJECT>*> m_childs;
 };
 
+#define CV_HAS_METRICS
+namespace metrics {
+CV_EXPORTS void setAccount(const std::string*);
+CV_EXPORTS void dump();
+}
+
 // Instrumentation external interface
 namespace instr
 {

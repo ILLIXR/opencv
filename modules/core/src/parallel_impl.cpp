@@ -129,7 +129,8 @@ public:
 
     Ptr<ParallelJob> job;
 
-	void incCounter();
+	void metricsSetAccount(const std::string*);
+	void metricsDump();
 
 #ifdef CV_PROFILE_THREADS
     double tickFreq;
@@ -193,23 +194,22 @@ public:
 
 };
 
-class profile_record {
+class MetricsRecord {
 public:
-	std::chrono::system_clock::time_point time;
-	std::size_t id; std::size_t counter; std::size_t subcounter; std::size_t wall_time_start_ns; std::size_t wall_time_stop_ns; std::size_t cpu_time_start_ns; std::size_t cpu_time_stop_ns;
-	profile_record(std::size_t id_, std::size_t counter_, std::size_t subcounter_, std::size_t wall_time_start_ns_, std::size_t wall_time_stop_ns_, std::size_t cpu_time_start_ns_, std::size_t cpu_time_stop_ns_)
-		: time{std::chrono::system_clock::now()}
-		, id{id_}
+	const std::string* account;
+	std::size_t threadId; std::size_t counter; std::size_t wall_time_start_ns; std::size_t wall_time_stop_ns; std::size_t cpu_time_start_ns; std::size_t cpu_time_stop_ns;
+	MetricsRecord(const std::string* account_, std::size_t threadId_, std::size_t counter_, std::size_t wall_time_start_ns_, std::size_t wall_time_stop_ns_, std::size_t cpu_time_start_ns_, std::size_t cpu_time_stop_ns_)
+		: account{account_}
+		, threadId{threadId_}
 		, counter{counter_}
-		, subcounter{subcounter_}
 		, wall_time_start_ns{wall_time_start_ns_}
 		, wall_time_stop_ns {wall_time_stop_ns_ }
 		, cpu_time_start_ns {cpu_time_start_ns_ }
 		, cpu_time_stop_ns  {cpu_time_stop_ns_  }
 	{ }
 };
-std::ostream& operator<<(std::ostream& os, const profile_record& r) {
-	os << "cpu_timer2," << r.id << "," << r.counter << "," << r.subcounter << "," << r.wall_time_start_ns << "," << r.wall_time_stop_ns << "," << r.cpu_time_start_ns << "," << r.cpu_time_stop_ns;
+static std::ostream& operator<<(std::ostream& os, const MetricsRecord& r) {
+	os << "cpu_timer2," << (r.account ? *r.account : "null") << "," << r.threadId << "," << r.counter << "," << r.wall_time_start_ns << "," << r.wall_time_stop_ns << "," << r.cpu_time_start_ns << "," << r.cpu_time_stop_ns;
     return os;
 }
 
@@ -245,7 +245,7 @@ public:
 #endif
     {
 		const char* ILLIXR_STDOUT_METRICS = getenv("ILLIXR_STDOUT_METRICS");
-		should_profile = ILLIXR_STDOUT_METRICS && (strcmp(ILLIXR_STDOUT_METRICS, "y") == 0);
+		shouldRecordMetrics = ILLIXR_STDOUT_METRICS && (strcmp(ILLIXR_STDOUT_METRICS, "y") == 0);
         CV_LOG_VERBOSE(NULL, 1, "MainThread: initializing new worker: " << id);
         int res = pthread_mutex_init(&mutex, NULL);
         if (res != 0)
@@ -305,23 +305,27 @@ public:
 
 
 #ifdef CV_CXX11
-	std::atomic<std::size_t> counter{0};
-	int64 dummy3_[8];
-#else
-    /*CV_DECL_ALIGNED(64)*/ volatile int counter = 0;
-	int64 dummy3_[8];
-#endif
-	std::vector<profile_record> profile_records;
-	bool should_profile;
+	std::atomic<const std::string*> metricsName {nullptr};
+	int64 dummy0_[8];
 
-	void incCounter() { ++counter; }
-	void maybeFlush() {
-		if (!profile_records.empty() && profile_records[0].time < std::chrono::system_clock::now() - std::chrono::seconds{1}) {
-			for (const profile_record& r : profile_records) {
-				std::cout << r << "\n";
-			}
-			profile_records.clear();
+	std::atomic<std::vector<MetricsRecord>*> metricsRecords {new std::vector<MetricsRecord>};
+	int64 dummy1_[8];
+#else
+	#error
+#endif
+	bool shouldRecordMetrics;
+
+	void metricsSetAccount(const std::string* name_) { metricsName = name_; }
+	void metricsDump() {
+		std::vector<MetricsRecord>* metricsBuffer = new std::vector<MetricsRecord>;
+		assert(metricsBuffer);
+		metricsBuffer = metricsRecords.exchange(metricsBuffer);
+
+		for (const MetricsRecord& r : *metricsBuffer) {
+			std::cout << r << "\n";
 		}
+
+		delete metricsBuffer;
 	}
 };
 
@@ -434,11 +438,11 @@ void WorkerThread::thread_body()
     ThreadPool::ThreadStatistics& stat = thread_pool.threads_stat[id + 1];
 #endif
 
-	std::size_t subcounter = 0;
+	std::size_t counter = 0;
     while (!stop_thread)
     {
-		size_t cpu_time_start_ns = should_profile ? thread_cpu_time().count() : 0;
-		size_t wall_time_start_ns  = should_profile
+		size_t cpu_time_start_ns = shouldRecordMetrics ? thread_cpu_time().count() : 0;
+		size_t wall_time_start_ns  = shouldRecordMetrics
 			? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count()
 			: 0
 			;
@@ -544,12 +548,11 @@ void WorkerThread::thread_body()
         stat.threadFree = getTickCount();
         stat.keepActive = allow_active_wait;
 #endif
-		if (should_profile) {
+		if (shouldRecordMetrics) {
 			size_t cpu_time_stop_ns = thread_cpu_time().count();
 			size_t wall_time_stop_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-			profile_records.push_back(profile_record{id, counter, subcounter, wall_time_start_ns, wall_time_stop_ns, cpu_time_start_ns, cpu_time_stop_ns});
-			maybeFlush();
-			++subcounter;
+			metricsRecords.load()->push_back(MetricsRecord{metricsName, id, counter, wall_time_start_ns, wall_time_stop_ns, cpu_time_start_ns, cpu_time_stop_ns});
+			++counter;
 		}
     }
 }
@@ -575,11 +578,17 @@ ThreadPool::ThreadPool()
     num_threads = defaultNumberOfThreads();
 }
 
-void ThreadPool::incCounter() {
+void ThreadPool::metricsSetAccount(const std::string* name) {
 	for (const cv::Ptr<cv::WorkerThread>& wt : threads) {
-		wt->incCounter();
+		wt->metricsSetAccount(name);
 	}
 }
+void ThreadPool::metricsDump() {
+	for (const cv::Ptr<cv::WorkerThread>& wt : threads) {
+		wt->metricsDump();
+	}
+}
+
 
 bool ThreadPool::reconfigure_(unsigned new_threads_count)
 {
@@ -827,8 +836,13 @@ void parallel_for_pthreads(const Range& range, const ParallelLoopBody& body, dou
     ThreadPool::instance().run(range, body, nstripes);
 }
 
-void incCounter() {
-	ThreadPool::instance().incCounter();
+namespace metrics {
+void setAccount(const std::string* name) {
+	ThreadPool::instance().metricsSetAccount(name);
+}
+void dump() {
+	ThreadPool::instance().metricsDump();
+}
 }
 
 }
