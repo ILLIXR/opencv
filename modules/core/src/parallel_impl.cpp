@@ -441,11 +441,6 @@ void WorkerThread::thread_body()
 	std::size_t counter = 0;
     while (!stop_thread)
     {
-		size_t cpu_time_start_ns = shouldRecordMetrics ? thread_cpu_time().count() : 0;
-		size_t wall_time_start_ns  = shouldRecordMetrics
-			? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count()
-			: 0
-			;
 
         CV_LOG_VERBOSE(NULL, 5, "Thread: ... loop iteration: allow_active_wait=" << allow_active_wait << "   has_wake_signal=" << has_wake_signal);
         if (allow_active_wait && CV_WORKER_ACTIVE_WAIT > 0)
@@ -507,7 +502,22 @@ void WorkerThread::thread_body()
                     stat.executedTasks = j->execute(true);
                     stat.threadExecuteStop = getTickCount();
 #else
+
+					size_t cpu_time_start_ns = shouldRecordMetrics ? thread_cpu_time().count() : 0;
+					size_t wall_time_start_ns  = shouldRecordMetrics
+						? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count()
+						: 0
+						;
+
                     j->execute(true);
+
+					if (shouldRecordMetrics) {
+						size_t cpu_time_stop_ns = thread_cpu_time().count();
+						size_t wall_time_stop_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+						metricsRecords.load()->push_back(MetricsRecord{metricsName, id, counter, wall_time_start_ns, wall_time_stop_ns, cpu_time_start_ns, cpu_time_stop_ns});
+						++counter;
+					}
+
 #endif
 #ifdef CV_CXX11
                     int completed = j->completed_thread_count.fetch_add(1, std::memory_order_seq_cst) + 1;
@@ -548,12 +558,6 @@ void WorkerThread::thread_body()
         stat.threadFree = getTickCount();
         stat.keepActive = allow_active_wait;
 #endif
-		if (shouldRecordMetrics) {
-			size_t cpu_time_stop_ns = thread_cpu_time().count();
-			size_t wall_time_stop_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-			metricsRecords.load()->push_back(MetricsRecord{metricsName, id, counter, wall_time_start_ns, wall_time_stop_ns, cpu_time_start_ns, cpu_time_stop_ns});
-			++counter;
-		}
     }
 }
 
